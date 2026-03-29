@@ -2,6 +2,7 @@
 
 use crate::crypto::DecryptionTarget;
 use crate::filter::Filter;
+use crate::filter::pluggable::DecompressorRegistry;
 use crate::object;
 use crate::object::Dict;
 use crate::object::Name;
@@ -167,6 +168,20 @@ impl<'a> Stream<'a> {
         &self,
         image_params: &ImageDecodeParams,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
+        self.decoded_image_with_registry(image_params, None)
+    }
+
+    /// Return the decoded data of the stream, and return image metadata
+    /// if available, using custom decompressors from the given registry.
+    ///
+    /// When a [`DecompressorRegistry`] is provided, image filters
+    /// (DCT, JPX, CCITT, JBIG2) will check for a registered override
+    /// before falling through to the built-in decoders.
+    pub fn decoded_image_with_registry(
+        &self,
+        image_params: &ImageDecodeParams,
+        registry: Option<&DecompressorRegistry>,
+    ) -> Result<FilterResult<'a>, DecodeFailure> {
         let data = self.raw_data();
         let filters_and_params = self.filters_and_params();
 
@@ -181,6 +196,7 @@ impl<'a> Stream<'a> {
                 current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data),
                 params,
                 image_params,
+                registry,
             )?;
             current = Some(new);
         }
