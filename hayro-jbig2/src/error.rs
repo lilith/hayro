@@ -23,6 +23,8 @@ pub enum DecodeError {
     Overflow(OverflowError),
     /// Feature not yet implemented.
     Unsupported,
+    /// Decoding was stopped early by the stop check.
+    Stopped,
 }
 
 /// Errors related to reading/parsing data.
@@ -149,6 +151,7 @@ impl fmt::Display for DecodeError {
             Self::Symbol(e) => write!(f, "{e}"),
             Self::Overflow(e) => write!(f, "{e}"),
             Self::Unsupported => write!(f, "unsupported feature"),
+            Self::Stopped => write!(f, "decoding stopped by the stop check"),
         }
     }
 }

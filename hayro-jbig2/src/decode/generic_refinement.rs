@@ -18,6 +18,7 @@ pub(crate) fn decode(
     header: &GenericRefinementRegionHeader<'_>,
     reference: &Bitmap,
     ctx: &mut ScratchBuffers,
+    stop: &dyn enough::Stop,
 ) -> Result<RegionBitmap> {
     let mut region = Bitmap::new_with(
         header.region_info.width,
@@ -27,7 +28,7 @@ pub(crate) fn decode(
         false,
     )?;
 
-    decode_into(header, reference, &mut region, ctx)?;
+    decode_into(header, reference, &mut region, ctx, stop)?;
 
     Ok(RegionBitmap {
         bitmap: region,
@@ -41,6 +42,7 @@ pub(crate) fn decode_into(
     reference: &Bitmap,
     region: &mut Bitmap,
     ctx: &mut ScratchBuffers,
+    stop: &dyn enough::Stop,
 ) -> Result<()> {
     let data = header.data;
 
@@ -84,6 +86,7 @@ pub(crate) fn decode_into(
         header.template,
         &header.adaptive_template_pixels,
         header.tpgron,
+        stop,
     )?;
 
     Ok(())
@@ -400,6 +403,7 @@ pub(crate) fn decode_bitmap(
     gr_template: RefinementTemplate,
     adaptive_template_pixels: &[AdaptiveTemplatePixel],
     tpgron: bool,
+    stop: &dyn enough::Stop,
 ) -> Result<()> {
     macro_rules! refinement_decode_loop {
         ($gatherer:expr, $tpgron:expr, $sltp_context:expr, $gather:expr) => {{
@@ -412,6 +416,10 @@ pub(crate) fn decode_bitmap(
 
             // "3) Decode each row as follows:" (6.3.5.6)
             for y in 0..height {
+                // Poll the stop check once per region row.
+                if enough::Stop::should_stop(stop) {
+                    return Err(crate::error::DecodeError::Stopped);
+                }
                 // "b) If TPGRON is 1, then decode a bit using the arithmetic entropy
                 // coder" (6.3.5.6)
                 if $tpgron {

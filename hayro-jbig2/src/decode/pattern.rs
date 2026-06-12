@@ -12,6 +12,7 @@ use alloc::vec::Vec;
 pub(crate) fn decode(
     header: &PatternDictionaryHeader<'_>,
     scratch: &mut ScratchBuffers,
+    stop: &dyn enough::Stop,
 ) -> Result<PatternDictionary> {
     let pattern_width = header.pattern_width as u32;
     let pattern_height = header.pattern_height as u32;
@@ -32,7 +33,7 @@ pub(crate) fn decode(
     // "2) Decode the collective bitmap using a generic region decoding procedure
     // as described in 6.2." (6.7.5)
     if header.mmr {
-        let _ = generic::decode_bitmap_mmr(&mut collective_bitmap, header.data)?;
+        let _ = generic::decode_bitmap_mmr(&mut collective_bitmap, header.data, stop)?;
     } else {
         let at_pixels = match header.template {
             Template::Template0 => [
@@ -70,6 +71,7 @@ pub(crate) fn decode(
             header.template,
             false,
             &at_pixels,
+            stop,
         )?;
     }
 

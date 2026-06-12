@@ -37,6 +37,9 @@ hayro-write = { path = "hayro-write", version = "0.7.0", default-features = fals
 hayro-postscript = { path = "hayro-postscript", version = "0.1.0", default-features = false }
 hayro-cmap = { path = "hayro-cmap", version = "0.1.0", default-features = false }
 
+enough = { version = "0.4.4", default-features = false }
+almost-enough = { version = "0.4.4", default-features = false, features = ["alloc"] }
+
 bitflags = { version = "2.10" }
 bytemuck = { version = "1" }
 image = { version = "0.25", default-features = false }

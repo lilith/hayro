@@ -25,6 +25,7 @@ pub(crate) fn decode(
     referred_tables: &[HuffmanTable],
     standard_tables: &StandardHuffmanTables,
     scratch: &mut ScratchBuffers,
+    stop: &dyn enough::Stop,
 ) -> Result<RegionBitmap> {
     let mut bitmap = Bitmap::new_with(
         header.region_info.width,
@@ -41,6 +42,7 @@ pub(crate) fn decode(
         standard_tables,
         &mut bitmap,
         scratch,
+        stop,
     )?;
 
     Ok(RegionBitmap {
@@ -56,12 +58,13 @@ pub(crate) fn decode_into(
     standard_tables: &StandardHuffmanTables,
     bitmap: &mut Bitmap,
     scratch: &mut ScratchBuffers,
+    stop: &dyn enough::Stop,
 ) -> Result<()> {
     if header.flags.use_huffman {
         let mut reader = Reader::new(header.data);
         let ctx =
             DecodeContext::new_huffman(&mut reader, header, referred_tables, standard_tables)?;
-        decode_with(ctx, symbols, header, bitmap)?;
+        decode_with(ctx, symbols, header, bitmap, stop)?;
     } else {
         let mut decoder = ArithmeticDecoder::new(header.data);
 
@@ -76,7 +79,7 @@ pub(crate) fn decode_into(
             .resize(num_gr_contexts, ArithmeticDecoderContext::default());
 
         let ctx = DecodeContext::new_arithmetic(&mut decoder, &mut contexts, &mut scratch.contexts);
-        decode_with(ctx, symbols, header, bitmap)?;
+        decode_with(ctx, symbols, header, bitmap, stop)?;
     }
 
     Ok(())
@@ -88,6 +91,7 @@ pub(crate) fn decode_with(
     symbols: &[&Bitmap],
     header: &TextRegionHeader<'_>,
     region: &mut Bitmap,
+    stop: &dyn enough::Stop,
 ) -> Result<()> {
     let strip_size = header.strip_size();
 
@@ -147,7 +151,7 @@ pub(crate) fn decode_with(
             let symbol_id = ctx.read_symbol_id()?;
 
             let symbol_bitmap =
-                decode_symbol_instance_bitmap(&mut ctx, symbols, header, symbol_id)?;
+                decode_symbol_instance_bitmap(&mut ctx, symbols, header, symbol_id, stop)?;
 
             let symbol_bitmap_ref: &Bitmap = match &symbol_bitmap {
                 SymbolBitmap::Reference(idx) => symbols.get(*idx).ok_or(SymbolError::OutOfRange)?,
@@ -472,6 +476,7 @@ impl<'a, 'b> DecodeContext<'a, 'b> {
         reference_y_offset: i32,
         refinement_template: RefinementTemplate,
         refinement_at_pixels: &[AdaptiveTemplatePixel],
+        stop: &dyn enough::Stop,
     ) -> Result<()> {
         match self {
             DecodeContext::Huffman { reader, tables, .. } => {
@@ -496,6 +501,7 @@ impl<'a, 'b> DecodeContext<'a, 'b> {
                     refinement_template,
                     refinement_at_pixels,
                     false,
+                    stop,
                 )
             }
             DecodeContext::Arithmetic {
@@ -512,6 +518,7 @@ impl<'a, 'b> DecodeContext<'a, 'b> {
                 refinement_template,
                 refinement_at_pixels,
                 false,
+                stop,
             ),
         }
     }
@@ -531,6 +538,7 @@ fn decode_symbol_instance_bitmap(
     symbols: &[&Bitmap],
     header: &TextRegionHeader<'_>,
     symbol_id: usize,
+    stop: &dyn enough::Stop,
 ) -> Result<SymbolBitmap> {
     if !header.flags.use_refinement || ctx.read_refinement_flag()? == 0 {
         return Ok(SymbolBitmap::Reference(symbol_id));
@@ -571,6 +579,7 @@ fn decode_symbol_instance_bitmap(
         reference_y_offset,
         header.flags.refinement_template,
         &header.refinement_at_pixels,
+        stop,
     )?;
 
     Ok(SymbolBitmap::Owned(refined_bitmap))
