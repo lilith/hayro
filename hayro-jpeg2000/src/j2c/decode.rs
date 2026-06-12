@@ -31,6 +31,7 @@ pub(crate) fn decode<'a>(
     data: &'a [u8],
     header: &'a Header<'a>,
     ctx: &mut DecoderContext<'a>,
+    stop: &crate::stop::StopCheck,
 ) -> Result<()> {
     let mut reader = BitReader::new(data);
     let tiles = tile::parse(&mut reader, header)?;
@@ -40,8 +41,14 @@ pub(crate) fn decode<'a>(
     }
 
     ctx.reset(header, &tiles[0]);
+    ctx.tile_decode_context.stop = stop.clone();
 
     for tile in &tiles {
+        // Poll the stop check once per tile.
+        if stop.should_stop() {
+            return Err(crate::error::DecodeError::Stopped);
+        }
+
         trace!(
             "tile {} rect [{},{} {}x{}]",
             tile.idx,
@@ -284,6 +291,8 @@ pub(crate) struct TileDecodeContext {
     pub(crate) bit_plane_decode_context: BitPlaneDecodeContext,
     /// Reusable buffers for decoding bitplanes.
     pub(crate) bit_plane_decode_buffers: BitPlaneDecodeBuffers,
+    /// Cooperative stop check polled per code block.
+    pub(crate) stop: crate::stop::StopCheck,
 }
 
 impl TileDecodeContext {
@@ -384,6 +393,10 @@ fn decode_sub_band_bitplanes(
             .clone()
             .map(|idx| &storage.code_blocks[idx])
         {
+            // Poll the stop check once per code block.
+            if tile_ctx.stop.should_stop() {
+                return Err(crate::error::DecodeError::Stopped);
+            }
             bitplane::decode(
                 code_block,
                 sub_band.sub_band_type,

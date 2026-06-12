@@ -137,6 +137,7 @@ pub(crate) fn parse<'a>(data: &'a [u8], mut settings: DecodeSettings) -> Result<
         resolve_alpha_and_color_space(&image_boxes, &parsed_codestream.header, &settings)?;
 
     Ok(Image {
+        stop: crate::stop::StopCheck::none(),
         codestream: parsed_codestream.data,
         header: parsed_codestream.header,
         boxes: image_boxes,
