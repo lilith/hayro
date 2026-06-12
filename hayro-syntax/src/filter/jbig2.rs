@@ -16,6 +16,7 @@ pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
+    stop: &almost_enough::StopToken,
 ) -> Option<FilterResult<'static>> {
     let globals = params
         .get::<Stream<'_>>(JBIG2_GLOBALS)
@@ -55,7 +56,9 @@ pub(crate) fn decode(
 
         let writer = BitWriter::new(&mut packed, 1)?;
         let mut decoder = BitWriterDecoder { writer };
-        image.decode(&mut decoder).ok()?;
+        image
+            .decode_with_stop(&mut decoder, &mut hayro_jbig2::DecoderContext::default(), stop)
+            .ok()?;
 
         (packed, 1)
     } else {
@@ -78,7 +81,9 @@ pub(crate) fn decode(
         }
 
         let mut decoder = Luma8Decoder { output: Vec::new() };
-        image.decode(&mut decoder).ok()?;
+        image
+            .decode_with_stop(&mut decoder, &mut hayro_jbig2::DecoderContext::default(), stop)
+            .ok()?;
 
         (decoder.output, 8)
     };

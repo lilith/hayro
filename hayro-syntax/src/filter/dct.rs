@@ -12,6 +12,7 @@ pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
+    stop: &almost_enough::StopToken,
 ) -> Option<FilterResult<'static>> {
     if image_params.width > u16::MAX as u32 || image_params.height > u16::MAX as u32 {
         return None;
@@ -61,6 +62,10 @@ pub(crate) fn decode(
     }
 
     decoder.set_options(DecoderOptions::default().jpeg_set_out_colorspace(out_colorspace));
+    decoder.set_stop_check(zune_jpeg::StopCheck::new({
+        let stop = stop.clone();
+        move || enough::Stop::should_stop(&stop)
+    }));
     let mut decoded = decoder.decode().ok()?;
 
     if out_colorspace == ColorSpace::YCCK {

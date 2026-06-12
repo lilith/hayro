@@ -11,36 +11,65 @@ pub(crate) mod flate {
     use crate::object::Dict;
 
     #[cfg(feature = "unsafe")]
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>) -> Option<Vec<u8>> {
+    pub(crate) fn decode(
+        data: &[u8],
+        params: &Dict<'_>,
+        stop: &almost_enough::StopToken,
+    ) -> Option<Vec<u8>> {
         use flate2::read::{DeflateDecoder, ZlibDecoder};
         use std::io::Read;
 
-        fn zlib_stream(data: &[u8]) -> Option<Vec<u8>> {
-            let mut decoder = ZlibDecoder::new(data);
+        // Read in bounded chunks and poll between them, so the work between
+        // polls stays bounded even for high-ratio streams.
+        fn read_chunked(
+            mut decoder: impl Read,
+            stop: &almost_enough::StopToken,
+        ) -> Option<Vec<u8>> {
+            const STOP_CHUNK: usize = 64 * 1024;
             let mut result = Vec::new();
-            decoder.read_to_end(&mut result).ok().map(|_| result)
+            let mut buf = [0_u8; 16 * 1024];
+            let mut next_stop_check = STOP_CHUNK;
+            loop {
+                match decoder.read(&mut buf) {
+                    Ok(0) => return Some(result),
+                    Ok(n) => {
+                        result.extend_from_slice(&buf[..n]);
+                        if result.len() >= next_stop_check {
+                            if enough::Stop::should_stop(stop) {
+                                return None;
+                            }
+                            next_stop_check = result.len() + STOP_CHUNK;
+                        }
+                    }
+                    Err(_) => return None,
+                }
+            }
         }
 
-        fn deflate_stream(data: &[u8]) -> Option<Vec<u8>> {
-            let mut decoder = DeflateDecoder::new(data);
-            let mut result = Vec::new();
-            decoder.read_to_end(&mut result).ok().map(|_| result)
-        }
+        let zlib_stream = |data: &[u8]| read_chunked(ZlibDecoder::new(data), stop);
+        let deflate_stream = |data: &[u8]| read_chunked(DeflateDecoder::new(data), stop);
 
         let decoded = zlib_stream(data)
             .or_else(|| deflate_stream(data))
             .or_else(|| {
+                if enough::Stop::should_stop(stop) {
+                    return None;
+                }
                 warn!("flate stream is broken, decoding with fallback");
 
-                fallback::decode(data)
+                fallback::decode(data, stop)
             })?;
         let params = PredictorParams::from_params(params);
         apply_predictor(decoded, &params)
     }
 
     #[cfg(not(feature = "unsafe"))]
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>) -> Option<Vec<u8>> {
-        let decoded = fallback::decode(data)?;
+    pub(crate) fn decode(
+        data: &[u8],
+        params: &Dict<'_>,
+        stop: &almost_enough::StopToken,
+    ) -> Option<Vec<u8>> {
+        let decoded = fallback::decode(data, stop)?;
         let params = PredictorParams::from_params(params);
         apply_predictor(decoded, &params)
     }
@@ -51,11 +80,11 @@ pub(crate) mod flate {
         use alloc::vec;
         use alloc::vec::Vec;
 
-        pub(crate) fn decode(data: &[u8]) -> Option<Vec<u8>> {
-            flate_decode(data)
+        pub(crate) fn decode(data: &[u8], stop: &almost_enough::StopToken) -> Option<Vec<u8>> {
+            flate_decode(data, stop)
         }
 
-        fn flate_decode(data: &[u8]) -> Option<Vec<u8>> {
+        fn flate_decode(data: &[u8], stop: &almost_enough::StopToken) -> Option<Vec<u8>> {
             if data.len() >= 2 {
                 let cmf = data[0];
                 let flg = data[1];
@@ -65,12 +94,12 @@ pub(crate) mod flate {
                     && (flg & 0x20) == 0
                 {
                     let mut stream = FlateStream::new(&data[2..]);
-                    return stream.decode();
+                    return stream.decode(stop);
                 }
             }
 
             let mut stream = FlateStream::new(data);
-            stream.decode()
+            stream.decode(stop)
         }
 
         struct FlateStream<'a> {
@@ -94,8 +123,12 @@ pub(crate) mod flate {
                 }
             }
 
-            fn decode(&mut self) -> Option<Vec<u8>> {
+            fn decode(&mut self, stop: &almost_enough::StopToken) -> Option<Vec<u8>> {
                 while !self.eof && self.pos < self.data.len() {
+                    // Poll the stop check once per deflate block.
+                    if enough::Stop::should_stop(stop) {
+                        return None;
+                    }
                     self.read_block();
                 }
 
@@ -570,10 +603,14 @@ pub(crate) mod lzw {
     use alloc::vec::Vec;
 
     /// Decode a LZW-encoded stream.
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>) -> Option<Vec<u8>> {
+    pub(crate) fn decode(
+        data: &[u8],
+        params: &Dict<'_>,
+        stop: &almost_enough::StopToken,
+    ) -> Option<Vec<u8>> {
         let params = PredictorParams::from_params(params);
 
-        let decoded = decode_impl(data, params.early_change)?;
+        let decoded = decode_impl(data, params.early_change, stop)?;
 
         apply_predictor(decoded, &params)
     }
@@ -583,14 +620,27 @@ pub(crate) mod lzw {
     const MAX_ENTRIES: usize = 4096;
     const INITIAL_SIZE: u16 = 258;
 
-    fn decode_impl(data: &[u8], early_change: bool) -> Option<Vec<u8>> {
+    fn decode_impl(
+        data: &[u8],
+        early_change: bool,
+        stop: &almost_enough::StopToken,
+    ) -> Option<Vec<u8>> {
         let mut table = Table::new(early_change);
         let mut bit_size = table.code_length();
         let mut reader = BitReader::new(data);
         let mut decoded = vec![];
         let mut prev = None;
+        const STOP_CHUNK: usize = 64 * 1024;
+        let mut next_stop_check = STOP_CHUNK;
 
         loop {
+            // Poll the stop check about every STOP_CHUNK output bytes.
+            if decoded.len() >= next_stop_check {
+                if enough::Stop::should_stop(stop) {
+                    return None;
+                }
+                next_stop_check = decoded.len() + STOP_CHUNK;
+            }
             let next = match reader.read(bit_size) {
                 Some(code) => code as usize,
                 None => {
@@ -1033,7 +1083,7 @@ mod tests {
     #[test]
     fn decode_lzw() {
         let input = [0x80, 0x0B, 0x60, 0x50, 0x22, 0x0C, 0x0C, 0x85, 0x01];
-        let decoded = lzw::decode(&input, &Dict::default()).unwrap();
+        let decoded = lzw::decode(&input, &Dict::default(), &almost_enough::StopToken::new(enough::Unstoppable)).unwrap();
 
         assert_eq!(decoded, vec![45, 45, 45, 45, 45, 65, 45, 45, 45, 66]);
     }
@@ -1044,7 +1094,7 @@ mod tests {
             0x78, 0x9c, 0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x7, 0x0, 0x5, 0x8c, 0x1, 0xf5,
         ];
 
-        let decoded = flate::decode(&input, &Dict::default()).unwrap();
+        let decoded = flate::decode(&input, &Dict::default(), &almost_enough::StopToken::new(enough::Unstoppable)).unwrap();
         assert_eq!(decoded, b"Hello");
     }
 
@@ -1052,7 +1102,7 @@ mod tests {
     fn decode_flate() {
         let input = [0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x7, 0x0];
 
-        let decoded = flate::decode(&input, &Dict::default()).unwrap();
+        let decoded = flate::decode(&input, &Dict::default(), &almost_enough::StopToken::new(enough::Unstoppable)).unwrap();
         assert_eq!(decoded, b"Hello");
     }
     

@@ -32,6 +32,8 @@ flate2 = { workspace = true, optional = true, features = ["zlib-rs"] }
 memchr = { workspace = true, optional = true }
 
 zune-jpeg = { workspace = true, optional = true }
+enough = { workspace = true }
+almost-enough = { workspace = true }
 hayro-ccitt = { workspace = true, optional = true }
 hayro-jbig2 = { workspace = true, optional = true }
 hayro-jpeg2000 = { workspace = true, optional = true }

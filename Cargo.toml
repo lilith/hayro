@@ -125,3 +125,6 @@ strip = "none"
 inherits = "release"
 debug = 1
 overflow-checks = true
+
+[patch.crates-io]
+zune-jpeg = { git = "https://github.com/lilith/zune-image", branch = "jpeg-stop-vendored" }

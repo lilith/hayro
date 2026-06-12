@@ -18,7 +18,11 @@ impl ImageColorSpace {
     }
 }
 
-pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterResult<'static>> {
+pub(crate) fn decode(
+    data: &[u8],
+    params: &ImageDecodeParams,
+    stop: &almost_enough::StopToken,
+) -> Option<FilterResult<'static>> {
     use crate::object::stream::ImageColorSpace;
 
     let settings = DecodeSettings {
@@ -27,7 +31,11 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
         target_resolution: params.target_dimension,
     };
 
-    let image = hayro_jpeg2000::Image::new(data, &settings).ok()?;
+    let mut image = hayro_jpeg2000::Image::new(data, &settings).ok()?;
+    image.set_stop_check(hayro_jpeg2000::StopCheck::new({
+        let stop = stop.clone();
+        move || enough::Stop::should_stop(&stop)
+    }));
 
     let width = image.width();
     let height = image.height();

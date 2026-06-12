@@ -228,8 +228,13 @@ impl<'a> Page<'a> {
 
     /// Return the decoded content stream of the page.
     pub fn page_stream(&self) -> Option<&[u8]> {
+        self.page_stream_with_stop(&almost_enough::StopToken::new(enough::Unstoppable))
+    }
+
+    /// Like [`Page::page_stream`], but polls `stop` during filter decoding.
+    pub fn page_stream_with_stop(&self, stop: &almost_enough::StopToken) -> Option<&[u8]> {
         let convert_single = |s: Stream<'_>| {
-            let data = s.decoded().ok()?;
+            let data = s.decoded_with_stop(stop).ok()?;
             Some(data.to_vec())
         };
 
@@ -335,6 +340,17 @@ impl<'a> Page<'a> {
     /// Return a typed iterator over the operators of the page's content stream.
     pub fn typed_operations(&self) -> TypedIter<'_> {
         TypedIter::from_untyped(self.operations())
+    }
+
+    /// Like [`Page::typed_operations`], but polls `stop` while decoding the
+    /// content stream (the decoded stream is cached, so only the first call
+    /// does decoding work).
+    pub fn typed_operations_with_stop(&self, stop: &almost_enough::StopToken) -> TypedIter<'_> {
+        TypedIter::from_untyped(
+            self.page_stream_with_stop(stop)
+                .map(|stream| UntypedIter::new(stream))
+                .unwrap_or(UntypedIter::empty()),
+        )
     }
 
     /// Return the initial transform that should be applied when rendering.
