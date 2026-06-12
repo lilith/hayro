@@ -79,6 +79,7 @@ use crate::jp2::icc::ICCMetadata;
 use crate::jp2::{DecodedImage, ImageBoxes};
 
 pub mod error;
+mod stop;
 #[macro_use]
 pub(crate) mod log;
 pub(crate) mod math;
@@ -89,6 +90,7 @@ pub use error::{
     ValidationError,
 };
 pub use j2c::DecoderContext;
+pub use stop::StopCheck;
 
 #[cfg(feature = "image")]
 pub mod integration;
@@ -150,6 +152,8 @@ pub struct Image<'a> {
     pub(crate) has_alpha: bool,
     /// The color space of the image.
     pub(crate) color_space: ColorSpace,
+    /// Cooperative stop check polled during decoding.
+    pub(crate) stop: StopCheck,
 }
 
 impl<'a> Image<'a> {
@@ -191,6 +195,17 @@ impl<'a> Image<'a> {
         self.header.component_infos[0].size_info.precision
     }
 
+    /// Set a cooperative stop check that is polled during decoding, once
+    /// per tile and once per code block.
+    ///
+    /// If the check signals a stop, decoding returns
+    /// [`DecodeError::Stopped`](crate::error::DecodeError::Stopped). The
+    /// default is [`StopCheck::none()`], which costs a single predicted
+    /// branch per poll.
+    pub fn set_stop_check(&mut self, stop: StopCheck) {
+        self.stop = stop;
+    }
+
     /// Decode the image and return its decoded result as a `Vec<u8>`, with each
     /// channel interleaved.
     pub fn decode(&self) -> Result<Vec<u8>> {
@@ -219,7 +234,7 @@ impl<'a> Image<'a> {
         decoder_context: &mut DecoderContext<'a>,
     ) -> Result<()> {
         let settings = &self.settings;
-        j2c::decode(self.codestream, &self.header, decoder_context)?;
+        j2c::decode(self.codestream, &self.header, decoder_context, &self.stop)?;
         let mut decoded_image = DecodedImage {
             decoded_components: &mut decoder_context.channel_data,
             boxes: self.boxes.clone(),
