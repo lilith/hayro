@@ -177,7 +177,6 @@ pub(crate) fn decode_bitmap_mmr(
     data: &[u8],
     stop: &dyn enough::Stop,
 ) -> Result<usize> {
-
     /// A decoder sink that writes decoded pixels into a `Bitmap`.
     struct BitmapDecoder<'a> {
         bitmap: &'a mut Bitmap,
@@ -319,8 +318,10 @@ pub(crate) fn decode_bitmap_mmr(
     // hayro-ccitt already aligns to the byte boundary before returning, so
     // nothing else to do here.
     let mut context = hayro_ccitt::DecoderContext::new(settings);
-    Ok(hayro_ccitt::decode_with_stop(data, &mut decoder, &mut context, stop)
-        .map_err(|_| RegionError::InvalidMmrData)?)
+    Ok(
+        hayro_ccitt::decode_with_stop(data, &mut decoder, &mut context, stop)
+            .map_err(|_| RegionError::InvalidMmrData)?,
+    )
 }
 
 // I'm not sure why, but I was getting very weird codegen (with bad performance)

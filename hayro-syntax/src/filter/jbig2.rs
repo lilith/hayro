@@ -57,7 +57,11 @@ pub(crate) fn decode(
         let writer = BitWriter::new(&mut packed, 1)?;
         let mut decoder = BitWriterDecoder { writer };
         image
-            .decode_with_stop(&mut decoder, &mut hayro_jbig2::DecoderContext::default(), stop)
+            .decode_with_stop(
+                &mut decoder,
+                &mut hayro_jbig2::DecoderContext::default(),
+                stop,
+            )
             .ok()?;
 
         (packed, 1)
@@ -82,7 +86,11 @@ pub(crate) fn decode(
 
         let mut decoder = Luma8Decoder { output: Vec::new() };
         image
-            .decode_with_stop(&mut decoder, &mut hayro_jbig2::DecoderContext::default(), stop)
+            .decode_with_stop(
+                &mut decoder,
+                &mut hayro_jbig2::DecoderContext::default(),
+                stop,
+            )
             .ok()?;
 
         (decoder.output, 8)

@@ -111,6 +111,22 @@ impl Default for RenderSettings {
     }
 }
 
+/// Render the page like [`render`], returning an error if the stop check
+/// configured in [`InterpreterSettings::stop`](hayro_interpret::InterpreterSettings)
+/// fired during rendering.
+///
+/// On `Err`, rendering was abandoned early (the partial pixmap is discarded).
+pub fn render_with_stop<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    interpreter_settings: &InterpreterSettings,
+    render_settings: &RenderSettings,
+) -> Result<Pixmap, enough::StopReason> {
+    let pixmap = render(page, cache, interpreter_settings, render_settings);
+    enough::Stop::check(&interpreter_settings.stop)?;
+    Ok(pixmap)
+}
+
 /// Render the page with the given settings to a pixmap.
 pub fn render<'a>(
     page: &'a Page<'a>,
@@ -138,6 +154,12 @@ pub fn render<'a>(
         interpreter_settings.clone(),
     );
 
+    // If the stop has already fired, skip pixmap/renderer setup entirely —
+    // for large outputs the allocations alone can take hundreds of ms.
+    if enough::Stop::should_stop(&interpreter_settings.stop) {
+        return Pixmap::new(pix_width, pix_height);
+    }
+
     let vc_settings = vello_cpu::RenderSettings {
         level: Level::new(),
         num_threads: 0,
@@ -145,6 +167,7 @@ pub fn render<'a>(
     };
 
     let mut device = Renderer::new(pix_width, pix_height, vc_settings, cache);
+    device.stop = interpreter_settings.stop.clone();
 
     device.ctx.set_paint(render_settings.bg_color);
     device
@@ -165,6 +188,13 @@ pub fn render<'a>(
     device.pop_clip_path();
 
     let mut pixmap = Pixmap::new(pix_width, pix_height);
+
+    // If the stop check fired during interpretation, the caller is abandoning
+    // this render: skip rasterization, which can dwarf interpretation time.
+    if enough::Stop::should_stop(&interpreter_settings.stop) {
+        return pixmap;
+    }
+
     let mut resources = vello_cpu::Resources::default();
     device.ctx.render_to_pixmap(&mut resources, &mut pixmap);
 

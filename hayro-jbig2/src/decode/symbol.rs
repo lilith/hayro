@@ -128,7 +128,8 @@ pub(crate) fn decode(
                 (_, true) => {
                     // Also decode a single symbol, but using refinement-aggregation.
                     // In this case, we can have both, huffman and arithmetic coding.
-                    let symbol = decode_refinement_aggregation_bitmap(&mut ctx, symbol_width, stop)?;
+                    let symbol =
+                        decode_refinement_aggregation_bitmap(&mut ctx, symbol_width, stop)?;
 
                     ctx.symbols.new.push(symbol);
                 }

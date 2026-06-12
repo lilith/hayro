@@ -473,7 +473,13 @@ fn decode_segments(
                     &header.region_info,
                     header.flags.initial_pixel_color,
                 ) {
-                    halftone::decode_into(&header, pattern_dict, page_bitmap, scratch_buffers, stop)?;
+                    halftone::decode_into(
+                        &header,
+                        pattern_dict,
+                        page_bitmap,
+                        scratch_buffers,
+                        stop,
+                    )?;
                 } else {
                     let region = halftone::decode(&header, pattern_dict, scratch_buffers, stop)?;
                     page_bitmap.combine(
@@ -537,7 +543,8 @@ fn decode_segments(
                     )?;
                 } else {
                     let reference = referred_segment.unwrap_or(page_bitmap);
-                    let region = generic_refinement::decode(&header, reference, scratch_buffers, stop)?;
+                    let region =
+                        generic_refinement::decode(&header, reference, scratch_buffers, stop)?;
                     page_bitmap.combine(
                         &region.bitmap,
                         region.bitmap.x_location as i32,

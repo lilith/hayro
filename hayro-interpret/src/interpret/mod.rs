@@ -102,6 +102,14 @@ pub struct InterpreterSettings {
     /// Note that this feature is currently not fully implemented yet, so some
     /// annotations might be missing.
     pub render_annotations: bool,
+    /// A cooperative stop check polled during interpretation (once per
+    /// operator) and threaded into stream and image decoding.
+    ///
+    /// When it signals a stop, interpretation ends early and the rendered
+    /// output is incomplete; check the token after rendering to tell the two
+    /// cases apart. The default is `StopToken::new(Unstoppable)`, which costs
+    /// one predicted branch per poll.
+    pub stop: almost_enough::StopToken,
 }
 
 impl Default for InterpreterSettings {
@@ -120,6 +128,7 @@ impl Default for InterpreterSettings {
             cmap_resolver: Arc::new(|_| None),
             warning_sink: Arc::new(|_| {}),
             render_annotations: true,
+            stop: almost_enough::StopToken::new(enough::Unstoppable),
         }
     }
 }
@@ -142,12 +151,21 @@ pub fn interpret_page<'a>(
     device: &mut impl Device<'a>,
 ) {
     let resources = page.resources();
-    interpret(page.typed_operations(), resources, context, device);
+    interpret(
+        page.typed_operations_with_stop(&context.settings.stop),
+        resources,
+        context,
+        device,
+    );
 
     if context.settings.render_annotations
         && let Some(annot_arr) = page.raw().get::<Array<'_>>(ANNOTS)
     {
         for annot in annot_arr.iter::<Dict<'_>>() {
+            // Poll the stop check once per annotation.
+            if enough::Stop::should_stop(&context.settings.stop) {
+                return;
+            }
             let flags = annot.get::<u32>(F).unwrap_or(0);
 
             // Annotation should be hidden.
@@ -229,6 +247,10 @@ pub fn interpret<'a>(
     context.save_state();
 
     while let Some(op) = ops.next() {
+        // Poll the stop check once per operator.
+        if enough::Stop::should_stop(&context.settings.stop) {
+            return;
+        }
         match op {
             TypedInstruction::SaveState(_) => context.save_state(),
             TypedInstruction::StrokeColorDeviceRgb(s) => {
@@ -665,6 +687,7 @@ pub fn interpret<'a>(
                         &context.settings.warning_sink,
                         &cache,
                         transfer_function.clone(),
+                        &context.settings.stop,
                     )
                 }) {
                     draw_xobject(&x_object, resources, context, device);
@@ -674,6 +697,7 @@ pub fn interpret<'a>(
                 let warning_sink = context.settings.warning_sink.clone();
                 let transfer_function = context.get().graphics_state.transfer_function.clone();
                 let cache = context.interpreter_cache.object_cache.clone();
+                let stop = context.settings.stop.clone();
                 if let Some(x_object) = ImageXObject::new(
                     i.0,
                     |name| context.get_color_space(resources, name),
@@ -681,6 +705,7 @@ pub fn interpret<'a>(
                     &cache,
                     false,
                     transfer_function,
+                    &stop,
                 ) {
                     draw_image_xobject(&x_object, context, device);
                 }

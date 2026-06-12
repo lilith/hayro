@@ -10,6 +10,8 @@ license = { workspace = true }
 readme = "README.md"
 
 [dependencies]
+enough = { workspace = true }
+almost-enough = { workspace = true }
 hayro-cmap = { workspace = true }
 hayro-syntax = { workspace = true, features = ["std", "images", "unsafe"] }
 kurbo = { workspace = true }

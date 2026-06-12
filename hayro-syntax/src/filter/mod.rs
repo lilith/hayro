@@ -88,43 +88,44 @@ impl Filter {
         #[cfg_attr(not(feature = "images"), allow(unused))] image_params: &ImageDecodeParams,
         #[cfg_attr(not(feature = "images"), allow(unused))] stop: &almost_enough::StopToken,
     ) -> Result<FilterResult<'static>, DecodeFailure> {
-        let res = match self {
-            Self::AsciiHexDecode => ascii_hex::decode(data)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::Ascii85Decode => ascii_85::decode(data)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::RunLengthDecode => run_length::decode(data, stop)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::LzwDecode => lzw_flate::lzw::decode(data, params, stop)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::FlateDecode => lzw_flate::flate::decode(data, params, stop)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            #[cfg(feature = "images")]
-            Self::DctDecode => {
-                dct::decode(data, params, image_params, stop).ok_or(DecodeFailure::ImageDecode)
-            }
-            #[cfg(feature = "images")]
-            Self::CcittFaxDecode => {
-                ccitt::decode(data, params, image_params, stop).ok_or(DecodeFailure::ImageDecode)
-            }
-            #[cfg(feature = "images")]
-            Self::Jbig2Decode => {
-                jbig2::decode(data, params, image_params, stop).ok_or(DecodeFailure::ImageDecode)
-            }
-            #[cfg(feature = "images")]
-            Self::JpxDecode => jpx::decode(data, image_params, stop).ok_or(DecodeFailure::ImageDecode),
-            #[cfg(not(feature = "images"))]
-            Self::DctDecode | Self::CcittFaxDecode | Self::Jbig2Decode | Self::JpxDecode => {
-                warn!("image decoding is not supported (enable the `images` feature)");
-                Err(DecodeFailure::ImageDecode)
-            }
-            _ => Err(DecodeFailure::StreamDecode),
-        };
+        let res =
+            match self {
+                Self::AsciiHexDecode => ascii_hex::decode(data)
+                    .map(FilterResult::from_data)
+                    .ok_or(DecodeFailure::StreamDecode),
+                Self::Ascii85Decode => ascii_85::decode(data)
+                    .map(FilterResult::from_data)
+                    .ok_or(DecodeFailure::StreamDecode),
+                Self::RunLengthDecode => run_length::decode(data, stop)
+                    .map(FilterResult::from_data)
+                    .ok_or(DecodeFailure::StreamDecode),
+                Self::LzwDecode => lzw_flate::lzw::decode(data, params, stop)
+                    .map(FilterResult::from_data)
+                    .ok_or(DecodeFailure::StreamDecode),
+                Self::FlateDecode => lzw_flate::flate::decode(data, params, stop)
+                    .map(FilterResult::from_data)
+                    .ok_or(DecodeFailure::StreamDecode),
+                #[cfg(feature = "images")]
+                Self::DctDecode => {
+                    dct::decode(data, params, image_params, stop).ok_or(DecodeFailure::ImageDecode)
+                }
+                #[cfg(feature = "images")]
+                Self::CcittFaxDecode => ccitt::decode(data, params, image_params, stop)
+                    .ok_or(DecodeFailure::ImageDecode),
+                #[cfg(feature = "images")]
+                Self::Jbig2Decode => jbig2::decode(data, params, image_params, stop)
+                    .ok_or(DecodeFailure::ImageDecode),
+                #[cfg(feature = "images")]
+                Self::JpxDecode => {
+                    jpx::decode(data, image_params, stop).ok_or(DecodeFailure::ImageDecode)
+                }
+                #[cfg(not(feature = "images"))]
+                Self::DctDecode | Self::CcittFaxDecode | Self::Jbig2Decode | Self::JpxDecode => {
+                    warn!("image decoding is not supported (enable the `images` feature)");
+                    Err(DecodeFailure::ImageDecode)
+                }
+                _ => Err(DecodeFailure::StreamDecode),
+            };
 
         if res.is_err() {
             // A filter that bailed because the stop check fired reports a

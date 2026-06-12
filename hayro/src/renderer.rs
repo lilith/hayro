@@ -29,6 +29,8 @@ pub(crate) struct Renderer {
     pub(crate) cur_mask: Option<Mask>,
     pub(crate) in_type3_glyph: bool,
     pub(crate) scaler: Scaler,
+    /// Cooperative stop check; when fired, nested rasterizations are skipped.
+    pub(crate) stop: almost_enough::StopToken,
 }
 
 #[derive(Clone, Copy)]
@@ -53,6 +55,7 @@ impl Renderer {
             cur_mask: None,
             in_type3_glyph: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
+            stop: almost_enough::StopToken::new(enough::Unstoppable),
         }
     }
 
@@ -104,6 +107,7 @@ impl Renderer {
                 cur_mask: None,
                 in_type3_glyph: false,
                 scaler: self.scaler,
+                stop: self.stop.clone(),
             };
             let mut mask_pix = Pixmap::new(self.ctx.width(), self.ctx.height());
             let rgb_data = ImageData::Rgb(RgbData {
@@ -118,9 +122,11 @@ impl Renderer {
             // but `draw_image_with_alpha_mask` is only called if the dimensions or interpolate
             // values between alpha_data and rgb_data don't match, which they do here.
             renderer.draw_image(rgb_data, Some(alpha_data));
-            renderer.ctx.flush();
-            let mut resources = vello_cpu::Resources::default();
-            renderer.ctx.render_to_pixmap(&mut resources, &mut mask_pix);
+            if !enough::Stop::should_stop(&renderer.stop) {
+                renderer.ctx.flush();
+                let mut resources = vello_cpu::Resources::default();
+                renderer.ctx.render_to_pixmap(&mut resources, &mut mask_pix);
+            }
             Mask::new_alpha(&mask_pix)
         };
 
@@ -559,14 +565,17 @@ impl Renderer {
                             outline_cache: self.outline_cache.clone(),
                             in_type3_glyph: false,
                             scaler: self.scaler,
+                            stop: self.stop.clone(),
                         };
                         let mut initial_transform = Affine::scale_non_uniform(xs as f64, ys as f64)
                             * Affine::translate((-bbox.x0, -bbox.y0));
                         t.interpret(&mut renderer, initial_transform, is_stroke);
                         let mut pix = Pixmap::new(pix_width, pix_height);
-                        renderer.ctx.flush();
-                        let mut resources = vello_cpu::Resources::default();
-                        renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+                        if !enough::Stop::should_stop(&renderer.stop) {
+                            renderer.ctx.flush();
+                            let mut resources = vello_cpu::Resources::default();
+                            renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+                        }
 
                         // TODO: Fix these
                         if x_step < 0.0 {
@@ -811,15 +820,18 @@ impl<'a> Device<'a> for Renderer {
                                         cur_mask: None,
                                         in_type3_glyph: false,
                                         scaler: self.scaler,
+                                        stop: self.stop.clone(),
                                     };
                                     let mut sub_pix = Pixmap::new(width, height);
                                     sub_renderer.ctx.set_transform(transform);
                                     sub_renderer.draw_image(rgb_bytes, Some(stencil));
-                                    sub_renderer.ctx.flush();
-                                    let mut resources = vello_cpu::Resources::default();
-                                    sub_renderer
-                                        .ctx
-                                        .render_to_pixmap(&mut resources, &mut sub_pix);
+                                    if !enough::Stop::should_stop(&sub_renderer.stop) {
+                                        sub_renderer.ctx.flush();
+                                        let mut resources = vello_cpu::Resources::default();
+                                        sub_renderer
+                                            .ctx
+                                            .render_to_pixmap(&mut resources, &mut sub_pix);
+                                    }
                                     sub_pix
                                 };
 
@@ -887,7 +899,7 @@ impl<'a> Device<'a> for Renderer {
 
                 self.soft_mask_cache
                     .entry(m.cache_key())
-                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height))
+                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, &self.stop))
                     .clone()
             }),
             None,
@@ -910,7 +922,7 @@ impl<'a> Device<'a> for Renderer {
 
             self.soft_mask_cache
                 .entry(m.cache_key())
-                .or_insert_with(|| draw_soft_mask(&m, settings, width, height))
+                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, &self.stop))
                 .clone()
         });
         if let Some(mask) = self.cur_mask.clone() {
@@ -1035,7 +1047,13 @@ fn render_shading_texture(
     )
 }
 
-fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16) -> Mask {
+fn draw_soft_mask(
+    mask: &SoftMask<'_>,
+    settings: RenderSettings,
+    width: u16,
+    height: u16,
+    stop: &almost_enough::StopToken,
+) -> Mask {
     let mut renderer = Renderer {
         ctx: RenderContext::new_with(width, height, derive_settings(&settings)),
         inside_pattern: false,
@@ -1044,6 +1062,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         outline_cache: Rc::new(std::cell::RefCell::new(FxHashMap::default())),
         in_type3_glyph: false,
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
+        stop: stop.clone(),
     };
 
     let bg_color = mask.background_color().to_rgba();
@@ -1066,9 +1085,11 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
     }
 
     let mut pix = Pixmap::new(width, height);
-    renderer.ctx.flush();
-    let mut resources = vello_cpu::Resources::default();
-    renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+    if !enough::Stop::should_stop(&renderer.stop) {
+        renderer.ctx.flush();
+        let mut resources = vello_cpu::Resources::default();
+        renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+    }
 
     let mut rendered_mask = match mask.mask_type() {
         MaskType::Luminosity => Mask::new_luminance(&pix),
