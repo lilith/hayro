@@ -5,6 +5,18 @@ use crate::object::dict::keys::{BITS_PER_COMPONENT, COLORS, COLUMNS, EARLY_CHANG
 use alloc::vec;
 use alloc::vec::Vec;
 
+/// Maximum size, in bytes, of a single decompressed stream (`FlateDecode` /
+/// `LZWDecode`). Guards against decompression bombs: a small compressed stream —
+/// especially a chained `/Filter [/FlateDecode …]` array where each layer
+/// amplifies ~1000× — could otherwise expand without bound and OOM the process.
+/// 512 MiB is far above any legitimate single PDF stream; a stream that would
+/// exceed it is treated as a decode failure. Tests use a tiny cap so the bomb
+/// cases stay cheap.
+#[cfg(not(test))]
+pub(crate) const MAX_DECODED_STREAM_BYTES: usize = 512 * 1024 * 1024;
+#[cfg(test)]
+pub(crate) const MAX_DECODED_STREAM_BYTES: usize = 64 * 1024;
+
 pub(crate) mod flate {
     use super::*;
     use crate::filter::lzw_flate::{PredictorParams, apply_predictor};
@@ -15,16 +27,20 @@ pub(crate) mod flate {
         use flate2::read::{DeflateDecoder, ZlibDecoder};
         use std::io::Read;
 
+        // Read at most one byte past the cap so an over-cap stream is detected
+        // (and rejected) rather than silently truncated.
         fn zlib_stream(data: &[u8]) -> Option<Vec<u8>> {
-            let mut decoder = ZlibDecoder::new(data);
+            let mut decoder = ZlibDecoder::new(data).take(MAX_DECODED_STREAM_BYTES as u64 + 1);
             let mut result = Vec::new();
-            decoder.read_to_end(&mut result).ok().map(|_| result)
+            decoder.read_to_end(&mut result).ok()?;
+            (result.len() <= MAX_DECODED_STREAM_BYTES).then_some(result)
         }
 
         fn deflate_stream(data: &[u8]) -> Option<Vec<u8>> {
-            let mut decoder = DeflateDecoder::new(data);
+            let mut decoder = DeflateDecoder::new(data).take(MAX_DECODED_STREAM_BYTES as u64 + 1);
             let mut result = Vec::new();
-            decoder.read_to_end(&mut result).ok().map(|_| result)
+            decoder.read_to_end(&mut result).ok()?;
+            (result.len() <= MAX_DECODED_STREAM_BYTES).then_some(result)
         }
 
         let decoded = zlib_stream(data)
@@ -97,6 +113,12 @@ pub(crate) mod flate {
             fn decode(&mut self) -> Option<Vec<u8>> {
                 while !self.eof && self.pos < self.data.len() {
                     self.read_block();
+                    // Bound the output against decompression bombs. `read_block`
+                    // appends at most one DEFLATE block (~64 KiB), so the peak
+                    // overshoot past the cap is one block.
+                    if self.output.len() > crate::filter::lzw_flate::MAX_DECODED_STREAM_BYTES {
+                        return None;
+                    }
                 }
 
                 Some(core::mem::take(&mut self.output))
@@ -564,7 +586,7 @@ pub(crate) mod flate {
 
 pub(crate) mod lzw {
     use crate::bit_reader::BitReader;
-    use crate::filter::lzw_flate::{PredictorParams, apply_predictor};
+    use crate::filter::lzw_flate::{MAX_DECODED_STREAM_BYTES, PredictorParams, apply_predictor};
     use crate::object::Dict;
     use alloc::vec;
     use alloc::vec::Vec;
@@ -591,6 +613,13 @@ pub(crate) mod lzw {
         let mut prev = None;
 
         loop {
+            // Bound the output against decompression bombs. Each iteration appends
+            // at most one table entry (length ≤ MAX_ENTRIES), so the peak overshoot
+            // past the cap is one entry.
+            if decoded.len() > MAX_DECODED_STREAM_BYTES {
+                warn!("LZW stream exceeds maximum decoded size, aborting");
+                return None;
+            }
             let next = match reader.read(bit_size) {
                 Some(code) => code as usize,
                 None => {
@@ -1055,7 +1084,39 @@ mod tests {
         let decoded = flate::decode(&input, &Dict::default()).unwrap();
         assert_eq!(decoded, b"Hello");
     }
-    
+
+    /// `zlib.compress(&[0u8; 128 KiB])` — a 149-byte stream that inflates to
+    /// 128 KiB, well past the 64 KiB `#[cfg(test)]` cap. Decoding it must return
+    /// `None` (the cap) rather than inflating it. Because this is a genuine, valid
+    /// zlib stream, a `None` result can only come from the size cap, never from a
+    /// malformed input. Guards against the 2026-07-18 security-audit C3
+    /// decompression-bomb DoS.
+    #[test]
+    fn flate_decode_rejects_decompression_bomb() {
+        use crate::filter::lzw_flate::MAX_DECODED_STREAM_BYTES;
+
+        const BOMB: &[u8] = &[
+            0x78, 0xda, 0xed, 0xc1, 0x31, 0x01, 0x00, 0x00, 0x00, 0xc2, 0xa0, 0xf5,
+            0x4f, 0xed, 0x61, 0x0d, 0xa0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x6e, 0x00, 0x1e, 0x00, 0x01,
+        ];
+        assert!(
+            flate::decode(BOMB, &Dict::default()).is_none(),
+            "an over-cap stream must be rejected under the {MAX_DECODED_STREAM_BYTES}-byte cap"
+        );
+    }
+
+
     fn predictor_expected() -> Vec<u8> {
         vec![
             // Row 1
