@@ -830,6 +830,9 @@ fn populate_from_xref_table<'a>(
                     ObjectIdentifier::new(obj_number as i32, entry.gen_number),
                     EntryType::Normal(entry.offset),
                 );
+            } else if obj_number > 0 {
+                // Free entry in an incremental update deletes an earlier revision's object.
+                insert_map.retain(|id, _| id.obj_number != obj_number as i32);
             }
         }
     }
@@ -943,9 +946,12 @@ fn xref_stream_subsection<'a>(
         let obj_number = start + i;
 
         match f_type {
-            // We don't care about free objects.
             0 => {
                 xref_reader.skip_bytes(f2_len as usize + f3_len as usize)?;
+                if obj_number > 0 {
+                    // Free entry in an incremental update deletes an earlier revision's object.
+                    insert_map.retain(|id, _| id.obj_number != obj_number as i32);
+                }
             }
             1 => {
                 let offset = if f2_len > 0 {

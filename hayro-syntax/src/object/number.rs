@@ -80,24 +80,32 @@ impl Skippable for Number {
     fn skip(r: &mut Reader<'_>, _: bool) -> Option<()> {
         let has_sign = r.forward_if(|b| b == b'+' || b == b'-').is_some();
 
+        let mut has_digits = false;
+        if r.forward_while_1(is_digit).is_some() {
+            has_digits = true;
+        }
+        let has_dot = r.forward_tag(b".").is_some();
+        if has_dot && r.forward_while_1(is_digit).is_some() {
+            has_digits = true;
+        }
         // Some PDFs have weird trailing minuses, so try to accept those as well.
-        match r.peek_byte()? {
-            b'.' => {
-                r.read_byte()?;
+        if has_digits && r.forward_tag(b"-").is_some() {
+            r.forward_while(is_digit_or_minus);
+        }
+
+        if !has_digits {
+            if has_dot {
                 // See PDFJS-9252 - treat a single . as 0.
-                r.forward_while(is_digit_or_minus);
+            } else if has_sign
+                && r.peek_byte()
+                    .is_some_and(|b| is_white_space_character(b) || matches!(b, b'(' | b'<'))
+            {
+                // See PDFJS-bug1753983 - accept just + or - as a zero.
+                // Also see PDFJS-bug1953099, where the sign is followed by a show
+                // text string operand, requiring us to allow '<' and '(' as well.
+            } else {
+                return None;
             }
-            b'0'..=b'9' | b'-' => {
-                r.forward_while_1(is_digit_or_minus)?;
-                if let Some(()) = r.forward_tag(b".") {
-                    r.forward_while(is_digit_or_minus);
-                }
-            }
-            // See PDFJS-bug1753983 - accept just + or - as a zero.
-            // ALso see PDFJS-bug1953099, where the sign is followed by a show
-            // text string operand, requiring us to allow '<' and '(' as well.
-            b if has_sign && (is_white_space_character(b) || matches!(b, b'(' | b'<')) => {}
-            _ => return None,
         }
 
         // See issue 994. Don't accept numbers that are followed by a regular character.

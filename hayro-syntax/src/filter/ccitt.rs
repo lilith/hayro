@@ -24,6 +24,9 @@ pub(crate) fn decode(
         .unwrap_or(0)
         .max(image_params.height);
     let output_len = (columns as usize).checked_mul(rows as usize)?;
+    if output_len == 0 || output_len > crate::filter::lzw_flate::MAX_DECODED_STREAM_BYTES {
+        return None;
+    }
     let end_of_block = params.get::<bool>(END_OF_BLOCK).unwrap_or(true);
 
     let settings = DecodeSettings {
@@ -133,12 +136,13 @@ pub(crate) fn decode(
         impl Decoder for Luma8Decoder {
             fn push_pixels(&mut self, white: bool, count: u32) {
                 let len = count as usize;
+                let end = self.idx.saturating_add(len).min(self.output.len());
 
-                if !white {
-                    self.output[self.idx..self.idx + len].fill(0x00);
+                if !white && self.idx < end {
+                    self.output[self.idx..end].fill(0x00);
                 }
 
-                self.idx += len;
+                self.idx = end;
             }
 
             fn next_line(&mut self) {

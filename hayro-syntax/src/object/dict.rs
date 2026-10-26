@@ -99,9 +99,9 @@ impl<'a> Dict<'a> {
     pub fn entries(&self) -> impl Iterator<Item = (Name<'a>, MaybeRef<Object<'a>>)> + '_ {
         let mut sorted_keys = self.keys().collect::<Vec<_>>();
         sorted_keys.sort_by(|n1, n2| n1.as_ref().cmp(n2.as_ref()));
-        sorted_keys.into_iter().map(|k| {
-            let obj = self.get_raw(k.deref()).unwrap();
-            (k, obj)
+        sorted_keys.into_iter().filter_map(|k| {
+            let obj = self.get_raw(k.deref())?;
+            Some((k, obj))
         })
     }
 
@@ -145,11 +145,11 @@ impl Debug for Dict<'_> {
 
             for (key, val) in offsets {
                 r.jump(*val);
-                debug_struct.field(
-                    &format!("{:?}", key.as_str()),
-                    &r.read_with_context::<MaybeRef<Object<'_>>>(&ReaderContext::dummy())
-                        .unwrap(),
-                );
+                if let Some(obj) =
+                    r.read_with_context::<MaybeRef<Object<'_>>>(&ReaderContext::dummy())
+                {
+                    debug_struct.field(&format!("{:?}", key.as_str()), &obj);
+                }
             }
         }
 
